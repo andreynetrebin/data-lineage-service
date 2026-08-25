@@ -1,0 +1,10 @@
+# config.yaml
+clickhouse: { host: localhost, port: 9000, database: default, batch_size: 1000 }
+output: { dir: out }
+api: { delay: 0.5 }
+sources:
+  datalens: { enabled: false }
+  clickhouse_catalog: { enabled: false, databases: [] }
+  airflow_openlineage: { enabled: false, lookback_days: 30 }
+  extractor_1c: { enabled: false }
+sinks: { clickhouse: true, json: true }
