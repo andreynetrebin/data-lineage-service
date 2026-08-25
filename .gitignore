@@ -1,0 +1,10 @@
+# .gitignore
+.env
+.iam_token_cache.json
+out/
+__pycache__/
+*.py[cod]
+.venv/
+.idea/
+.vscode/
+*.egg-info/
