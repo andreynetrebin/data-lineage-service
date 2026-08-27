@@ -1,5 +1,5 @@
 # config.yaml
-clickhouse: { host: localhost, port: 9000, database: default, batch_size: 1000 }
+clickhouse: { host: localhost, port: 8123, database: default, batch_size: 1000 }
 output: { dir: out }
 api: { delay: 0.5 }
 sources:
