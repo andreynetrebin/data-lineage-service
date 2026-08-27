@@ -13,7 +13,7 @@ def write_yaml(tmp_path: Path, content: str) -> Path:
 def test_defaults_when_no_file(tmp_path):
     s = load_settings(config_path=tmp_path / "missing.yaml", env={})
     assert s.clickhouse.host == "localhost"
-    assert s.clickhouse.port == 9000
+    assert s.clickhouse.port == 8123
     assert s.clickhouse.batch_size == 1000
     assert s.sinks == {"clickhouse": True, "json": True}
     assert s.enabled_sources() == {}
