@@ -39,6 +39,8 @@ class Settings:
     out_dir: Path
     datalens_org_id: Optional[str] = None
     api_delay: float = 0.5
+    iam_cache_file: Path = Path(".iam_token_cache.json")   # NEW
+    iam_ttl_seconds: int = 11 * 60 * 60                    # NEW
 
     def enabled_sources(self) -> Dict[str, SourceSettings]:
         return {n: s for n, s in self.sources.items() if s.enabled}
@@ -78,6 +80,7 @@ def load_settings(config_path: Optional[Any] = None,
 
     sinks = dict(raw.get("sinks", {}) or {"clickhouse": True, "json": True})
     out_dir = Path((raw.get("output", {}) or {}).get("dir", "out"))
+    _auth = raw.get("auth", {}) or {}
 
     return Settings(
         clickhouse=clickhouse,
@@ -86,4 +89,6 @@ def load_settings(config_path: Optional[Any] = None,
         out_dir=out_dir,
         datalens_org_id=env_map.get("DATALENS_ORG_ID"),
         api_delay=float((raw.get("api", {}) or {}).get("delay", 0.5)),
+        iam_cache_file=Path(env_map.get("IAM_TOKEN_CACHE_FILE", _auth.get("cache_file", ".iam_token_cache.json"))),
+        iam_ttl_seconds=int(_auth.get("ttl_seconds", 11 * 60 * 60)),
     )
