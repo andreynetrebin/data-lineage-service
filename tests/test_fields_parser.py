@@ -25,6 +25,7 @@ def test_parse_returns_structured_dataset(koef_nacenki):
     assert parsed.dataset_id == "i4nfn0waon1q1"
     assert parsed.name == "Коэффициент наценки"
     assert len(parsed.sources) == 3
+    assert len(parsed.avatars) == 3
     assert len(parsed.avatar_relations) == 2
     assert len(parsed.field_dependencies) == 7
     assert len(parsed.fields) >= 50
@@ -33,6 +34,19 @@ def test_parse_returns_structured_dataset(koef_nacenki):
 def test_parse_rejects_non_dict():
     with pytest.raises(ValueError):
         fp.parse_dataset([])
+
+
+def test_avatars_parsed_with_source_id_and_is_root(koef_nacenki):
+    parsed = fp.parse_dataset(koef_nacenki)
+    by_id = {av.id: av for av in parsed.avatars}
+    root = next(av for av in parsed.avatars if av.is_root)
+    assert root.id == "bf3df1a0-76fc-11f1-9155-6d55ddd5ea47"
+    assert root.title == "Коэф. наценки факт-план"
+    assert root.source_id == "b943a3d2-76fc-11f1-9155-6d55ddd5ea47"
+
+    nomenklatura = by_id["c3f6bec0-76fc-11f1-9155-6d55ddd5ea47"]
+    assert nomenklatura.is_root is False
+    assert nomenklatura.source_id == "c3f6bec2-76fc-11f1-9155-6d55ddd5ea47"
 
 
 def test_extracts_tables_from_ch_table(koef_nacenki):
@@ -93,7 +107,6 @@ def test_avatar_relations_parsed(koef_nacenki):
 def test_field_dependencies_parsed(koef_nacenki):
     parsed = fp.parse_dataset(koef_nacenki)
     deps_by_id = {d.field_id: d.depends_on for d in parsed.field_dependencies}
-
     assert "2ad94990-76fe-11f1-9155-6d55ddd5ea47" in deps_by_id
     assert set(deps_by_id["2ad94990-76fe-11f1-9155-6d55ddd5ea47"]) == {
         "vyruchkazakazyiu_1_1n92", "summazakupkizakazyiu_1_8skq",
@@ -110,7 +123,7 @@ def test_result_schema_fields_parsed(koef_nacenki):
     assert period.type == "DIMENSION"
     assert period.calc_mode == "direct"
     assert period.source == "Период"
-    assert period.avatar_id is not None
+    assert period.avatar_id == "bf3df1a0-76fc-11f1-9155-6d55ddd5ea47"
 
     koef = by_guid["2ad94990-76fe-11f1-9155-6d55ddd5ea47"]
     assert koef.type == "MEASURE"

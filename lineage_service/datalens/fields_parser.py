@@ -11,11 +11,19 @@ from sqlglot import exp
 @dataclass
 class SourceInfo:
     id: str
-    source_type: str           # CH_TABLE | CH_SUBSELECT
+    source_type: str
     title: str
     tables: List[str] = field(default_factory=list)
     connection_id: Optional[str] = None
     subsql: Optional[str] = None
+
+
+@dataclass
+class AvatarInfo:
+    id: str
+    title: str
+    source_id: str
+    is_root: bool
 
 
 @dataclass
@@ -38,9 +46,9 @@ class AvatarRelation:
 class FieldInfo:
     guid: str
     title: str
-    type: str                  # DIMENSION | MEASURE
+    type: str
     data_type: str
-    calc_mode: str             # direct | formula
+    calc_mode: str
     formula: Optional[str] = None
     avatar_id: Optional[str] = None
     source: Optional[str] = None
@@ -57,23 +65,21 @@ class ParsedDataset:
     dataset_id: str
     name: str
     sources: List[SourceInfo] = field(default_factory=list)
+    avatars: List[AvatarInfo] = field(default_factory=list)
     avatar_relations: List[AvatarRelation] = field(default_factory=list)
     fields: List[FieldInfo] = field(default_factory=list)
     field_dependencies: List[FieldDependency] = field(default_factory=list)
 
 
 def extract_tables_from_sql(sql: str, dialect: str = "clickhouse") -> List[str]:
-    """Возвращает физические таблицы (db.table или table), игнорируя CTE."""
     if not sql:
         return []
     try:
         parsed = sqlglot.parse(sql, read=dialect)
     except Exception:
         return []
-
     ctes: Set[str] = set()
     tables: Set[str] = set()
-
     for statement in parsed:
         if statement is None:
             continue
@@ -88,12 +94,10 @@ def extract_tables_from_sql(sql: str, dialect: str = "clickhouse") -> List[str]:
             if name.lower() in ctes or name.lower() in ("range", "numbers"):
                 continue
             tables.add(f"{db}.{name}" if db else name)
-
     return sorted(tables)
 
 
 def parse_dataset(resp: Dict[str, Any]) -> ParsedDataset:
-    """Преобразует сырой ответ getDataset в структурированный ParsedDataset."""
     if not isinstance(resp, dict):
         raise ValueError("Ожидался словарь ответа getDataset")
 
@@ -103,13 +107,13 @@ def parse_dataset(resp: Dict[str, Any]) -> ParsedDataset:
         name=str(resp.get("name") or ""),
     )
 
+    # Источники
     for src in dataset.get("sources", []) or []:
         src_type = src.get("source_type", "")
         params = src.get("parameters", {}) or {}
         title = src.get("title") or src.get("id") or ""
         tables: List[str] = []
         subsql: Optional[str] = None
-
         if src_type == "CH_TABLE":
             db = params.get("db_name")
             tbl = params.get("table_name")
@@ -118,7 +122,6 @@ def parse_dataset(resp: Dict[str, Any]) -> ParsedDataset:
         elif src_type == "CH_SUBSELECT":
             subsql = params.get("subsql") or ""
             tables = extract_tables_from_sql(subsql)
-
         parsed.sources.append(SourceInfo(
             id=str(src.get("id") or ""),
             source_type=src_type,
@@ -128,6 +131,16 @@ def parse_dataset(resp: Dict[str, Any]) -> ParsedDataset:
             subsql=subsql,
         ))
 
+    # Аватары (source_avatars в dataset, не в options)
+    for av in dataset.get("source_avatars", []) or []:
+        parsed.avatars.append(AvatarInfo(
+            id=str(av.get("id") or ""),
+            title=str(av.get("title") or ""),
+            source_id=str(av.get("source_id") or ""),
+            is_root=bool(av.get("is_root")),
+        ))
+
+    # Джойны между аватарами
     for rel in dataset.get("avatar_relations", []) or []:
         conditions = []
         for cond in rel.get("conditions", []) or []:
@@ -148,6 +161,7 @@ def parse_dataset(resp: Dict[str, Any]) -> ParsedDataset:
             conditions=conditions,
         ))
 
+    # Поля
     for f in dataset.get("result_schema", []) or []:
         parsed.fields.append(FieldInfo(
             guid=str(f.get("guid") or ""),
@@ -160,6 +174,7 @@ def parse_dataset(resp: Dict[str, Any]) -> ParsedDataset:
             source=f.get("source"),
         ))
 
+    # Зависимости полей
     aux = dataset.get("result_schema_aux") or {}
     inter = aux.get("inter_dependencies") or {}
     for dep in inter.get("deps", []) or []:
@@ -175,7 +190,6 @@ def parse_dataset(resp: Dict[str, Any]) -> ParsedDataset:
 
 
 def all_tables(parsed: ParsedDataset) -> List[str]:
-    """Уникальный список физических таблиц всех источников."""
     seen: Set[str] = set()
     out: List[str] = []
     for src in parsed.sources:
