@@ -6,6 +6,7 @@ from . import config
 from .alerts import TelegramAlerter
 from .connectors import REGISTRY
 from .graph_traversal import traverse
+from .logging_setup import setup_logging
 from .model import Edge, Node, Snapshot
 from .sinks.clickhouse_sink import ClickHouseSink, create_client
 from .sinks.json_sink import JsonSink
@@ -15,17 +16,19 @@ from .snapshot_diff import diff_graphs
 def _build_sinks():
     sinks = []
     if config.SINKS.get("clickhouse", True):
-        sinks.append(ClickHouseSink(config.CLICKHOUSE, config.BATCH_SIZE))
+        client = create_client(config.CLICKHOUSE)
+        sinks.append(ClickHouseSink(client, config.BATCH_SIZE))
     if config.SINKS.get("json", True):
         sinks.append(JsonSink(config.OUT_DIR))
     return sinks
 
 
 def _enabled_connectors():
-    for name, cls in REGISTRY.items():
-        cfg = config.SOURCES.get(name, {})
-        if cfg.get("enabled", False):
-            yield name, cls({**cfg, "clickhouse": config.CLICKHOUSE})
+    for name, src in config.SOURCES.items():
+        cls = REGISTRY.get(name)
+        if cls is None or not src.enabled:
+            continue
+        yield name, cls({**src.params, "clickhouse": config.CLICKHOUSE})
 
 
 def collect():
@@ -35,13 +38,14 @@ def collect():
 
     for name, conn in _enabled_connectors():
         print(f"\n=== Коннектор: {name} ===")
-        n, e = conn.collect()
-        for node in n:
+        g = conn.collect()
+        print(f"  узлов={g.stats['nodes']}, рёбер={g.stats['edges']}")
+        for node in g.nodes.values():
             if node.id in nodes_by_id:
                 nodes_by_id[node.id].props.update(node.props)
             else:
                 nodes_by_id[node.id] = node
-        edges.extend(e)
+        edges.extend(g.edges)
 
     seen, dedup_edges = set(), []
     for e in edges:
@@ -58,9 +62,7 @@ def collect():
 
 def lineage(node: str, direction: str = "downstream", depth: int = 10):
     client = create_client(config.CLICKHOUSE)
-    rows = client.query(
-        "SELECT src, dst, type, system FROM edges_latest"
-    ).result_rows
+    rows = client.query("SELECT src, dst, type, system FROM edges_latest").result_rows
     edges = [Edge(src=r[0], dst=r[1], type=r[2], system=r[3]) for r in rows]
 
     visited, path_edges = traverse(edges, node, direction=direction, max_depth=depth)
@@ -79,38 +81,32 @@ def diff(from_snap: str, to_snap: str):
     def load_nodes(sid):
         rows = client.query(
             "SELECT node_id, system, type, name, props FROM meta_nodes FINAL "
-            "WHERE snapshot_id = %(sid)s",
-            parameters={"sid": sid},
+            "WHERE snapshot_id = %(sid)s", parameters={"sid": sid},
         ).result_rows
         return [Node(id=r[0], system=r[1], type=r[2], name=r[3], props={}) for r in rows]
 
     def load_edges(sid):
         rows = client.query(
             "SELECT src, dst, type, system, props FROM meta_edges FINAL "
-            "WHERE snapshot_id = %(sid)s",
-            parameters={"sid": sid},
+            "WHERE snapshot_id = %(sid)s", parameters={"sid": sid},
         ).result_rows
         return [Edge(src=r[0], dst=r[1], type=r[2], system=r[3]) for r in rows]
 
-    old_n, old_e = load_nodes(from_snap), load_edges(from_snap)
-    new_n, new_e = load_nodes(to_snap), load_edges(to_snap)
-
-    diff_result = diff_graphs(old_n, old_e, new_n, new_e)
-
+    diff_result = diff_graphs(load_nodes(from_snap), load_edges(from_snap),
+                              load_nodes(to_snap), load_edges(to_snap))
     if diff_result.is_empty:
         print("Изменений не обнаружено.")
         return
 
     from .snapshot_diff import summarize
-    lines = summarize(diff_result, limit=30)
     print(f"\nDiff {from_snap} -> {to_snap}:")
-    for line in lines:
+    for line in summarize(diff_result, limit=30):
         print(f"  {line}")
 
-    # Telegram-алерт
     if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
         alerter = TelegramAlerter(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
-        if alerter.notify_diff(diff_result, title=f"Lineage diff {from_snap[:8]}→{to_snap[:8]}"):
+        if alerter.notify_diff(diff_result,
+                               title=f"Lineage diff {from_snap[:8]}→{to_snap[:8]}"):
             print("\n✓ Алерт отправлен в Telegram")
 
 
@@ -130,25 +126,30 @@ def serve():
 
 
 def main():
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--log-level", default="INFO",
+                        choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+
     p = argparse.ArgumentParser(prog="lineage_service")
     sub = p.add_subparsers(dest="cmd")
 
-    sub.add_parser("collect", help="снять снапшот графа метаданных")
-    sub.add_parser("snapshots", help="список снапшотов")
+    sub.add_parser("collect", parents=[common], help="снять снапшот графа метаданных")
+    sub.add_parser("snapshots", parents=[common], help="список снапшотов")
 
-    lin = sub.add_parser("lineage", help="BFS-обход графа")
-    lin.add_argument("node", help="стартовый узел (например, 1c:source_1c:HW)")
+    lin = sub.add_parser("lineage", parents=[common], help="BFS-обход графа")
+    lin.add_argument("node")
     lin.add_argument("--direction", choices=["downstream", "upstream"],
                      default="downstream")
     lin.add_argument("--depth", type=int, default=10)
 
-    d = sub.add_parser("diff", help="diff двух снапшотов")
-    d.add_argument("from_snap", help="исходный snapshot_id")
-    d.add_argument("to_snap", help="целевой snapshot_id")
+    d = sub.add_parser("diff", parents=[common], help="diff двух снапшотов")
+    d.add_argument("from_snap")
+    d.add_argument("to_snap")
 
-    sub.add_parser("serve", help="FastAPI-сервис")
+    sub.add_parser("serve", parents=[common], help="FastAPI-сервис")
 
     args = p.parse_args()
+    setup_logging(args.log_level)
 
     if args.cmd == "collect":
         collect()

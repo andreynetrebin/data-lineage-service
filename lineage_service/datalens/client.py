@@ -1,6 +1,7 @@
 """Клиент DataLens API: ретраи (401/429/5xx/network), пагинация, связи."""
 from __future__ import annotations
 
+import logging
 import random
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -8,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 import requests
 
 API_BASE = "https://api.datalens.tech"
+log = logging.getLogger("datalens.client")
 
 
 class DataLensClient:
@@ -39,15 +41,21 @@ class DataLensClient:
         url = f"{self.base_url}{endpoint}"
         for attempt in range(self.max_retries):
             try:
+                log.debug("POST %s (попытка %d)", endpoint, attempt + 1)
                 r = requests.post(url, headers=self.headers, json=data,
                                   verify=self.verify_ssl, timeout=60)
-            except requests.exceptions.RequestException:
+            except requests.exceptions.RequestException as exc:
                 if attempt < self.max_retries - 1:
-                    self._sleep(self._backoff(attempt))
+                    wait = self._backoff(attempt)
+                    log.warning("Сетевая ошибка %s: %s — пауза %.1fс (попытка %d/%d)",
+                                endpoint, exc, wait, attempt + 1, self.max_retries)
+                    self._sleep(wait)
                     continue
+                log.error("Сетевая ошибка %s исчерпала ретраи: %s", endpoint, exc)
                 return None
 
             if r.status_code == 401 and retry_on_401:
+                log.info("401 на %s — обновляем IAM-токен", endpoint)
                 self.token = self._refresh_token(self.token)
                 self.headers["Authorization"] = f"Bearer {self.token}"
                 continue
@@ -60,17 +68,27 @@ class DataLensClient:
                     except ValueError:
                         pass
                 if attempt < self.max_retries - 1:
+                    log.warning("%s на %s — пауза %.1fс (попытка %d/%d)",
+                                r.status_code, endpoint, wait,
+                                attempt + 1, self.max_retries)
                     self._sleep(wait)
                     continue
+                log.error("%s на %s исчерпал ретраи", r.status_code, endpoint)
                 return None
 
             if 400 <= r.status_code < 500:
+                log.error("Клиентская ошибка %s на %s (без ретрая)",
+                          r.status_code, endpoint)
                 return None
 
             try:
+                log.info("%s -> %s", endpoint, r.status_code)
                 return r.json()
             except ValueError:
+                log.error("Не-JSON ответ от %s", endpoint)
                 return None
+
+        log.error("Ретраи исчерпаны для %s", endpoint)
         return None
 
     def _backoff(self, attempt: int) -> float:
@@ -97,7 +115,8 @@ class DataLensClient:
         entries: List[Dict[str, Any]] = []
         page = 1
         while True:
-            resp = self.req("/rpc/getEntries", {"scope": scope, "page": page, "pageSize": page_size})
+            resp = self.req("/rpc/getEntries",
+                            {"scope": scope, "page": page, "pageSize": page_size})
             if not resp:
                 break
             batch = resp.get("entries", [])
@@ -109,10 +128,12 @@ class DataLensClient:
 
     def get_relations(self, entry_id: str, direction: str) -> List[str]:
         resp = self.req("/rpc/getEntriesRelations",
-                        {"entryIds": [entry_id], "linkDirection": direction, "limit": 1000})
+                        {"entryIds": [entry_id], "linkDirection": direction,
+                         "limit": 1000})
         if not resp:
             return []
-        return list({rel["entryId"] for rel in resp.get("relations", []) if "entryId" in rel})
+        return list({rel["entryId"] for rel in resp.get("relations", [])
+                     if "entryId" in rel})
 
     def get_dataset(self, dataset_id: str):
         return self.req("/rpc/getDataset", {"datasetId": dataset_id})
