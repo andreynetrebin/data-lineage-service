@@ -96,3 +96,20 @@ def load_settings(config_path: Optional[Any] = None,
         telegram_bot_token=env_map.get("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=env_map.get("TELEGRAM_CHAT_ID"),
     )
+
+
+# ──── Модуль-level экспорты для CLI и других модулей ──────────────────
+_settings = load_settings()
+CLICKHOUSE = {
+    "host": _settings.clickhouse.host,
+    "port": _settings.clickhouse.port,
+    "user": _settings.clickhouse.user,
+    "password": _settings.clickhouse.password,
+    "database": _settings.clickhouse.database,
+}
+BATCH_SIZE = _settings.clickhouse.batch_size
+SINKS = _settings.sinks
+OUT_DIR = _settings.out_dir
+SOURCES = _settings.sources
+TELEGRAM_BOT_TOKEN = _settings.telegram_bot_token
+TELEGRAM_CHAT_ID = _settings.telegram_chat_id
