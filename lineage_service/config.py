@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover
 @dataclass(frozen=True)
 class ClickHouseSettings:
     host: str = "localhost"
-    port: int = 9000
+    port: int = 8123
     user: str = "default"
     password: str = ""
     database: str = "default"
@@ -39,8 +39,10 @@ class Settings:
     out_dir: Path
     datalens_org_id: Optional[str] = None
     api_delay: float = 0.5
-    iam_cache_file: Path = Path(".iam_token_cache.json")   # NEW
-    iam_ttl_seconds: int = 11 * 60 * 60                    # NEW
+    iam_cache_file: Path = Path(".iam_token_cache.json")
+    iam_ttl_seconds: int = 11 * 60 * 60
+    telegram_bot_token: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
 
     def enabled_sources(self) -> Dict[str, SourceSettings]:
         return {n: s for n, s in self.sources.items() if s.enabled}
@@ -48,7 +50,6 @@ class Settings:
 
 def load_settings(config_path: Optional[Any] = None,
                   env: Optional[Dict[str, str]] = None) -> Settings:
-    """Загружает настройки. `env` можно передать явно (для тестов)."""
     if env is None:
         load_dotenv()
         env_map: Dict[str, str] = os.environ
@@ -80,7 +81,7 @@ def load_settings(config_path: Optional[Any] = None,
 
     sinks = dict(raw.get("sinks", {}) or {"clickhouse": True, "json": True})
     out_dir = Path((raw.get("output", {}) or {}).get("dir", "out"))
-    _auth = raw.get("auth", {}) or {}
+    auth_cfg = raw.get("auth", {}) or {}
 
     return Settings(
         clickhouse=clickhouse,
@@ -89,6 +90,9 @@ def load_settings(config_path: Optional[Any] = None,
         out_dir=out_dir,
         datalens_org_id=env_map.get("DATALENS_ORG_ID"),
         api_delay=float((raw.get("api", {}) or {}).get("delay", 0.5)),
-        iam_cache_file=Path(env_map.get("IAM_TOKEN_CACHE_FILE", _auth.get("cache_file", ".iam_token_cache.json"))),
-        iam_ttl_seconds=int(_auth.get("ttl_seconds", 11 * 60 * 60)),
+        iam_cache_file=Path(env_map.get("IAM_TOKEN_CACHE_FILE",
+                                        auth_cfg.get("cache_file", ".iam_token_cache.json"))),
+        iam_ttl_seconds=int(auth_cfg.get("ttl_seconds", 11 * 60 * 60)),
+        telegram_bot_token=env_map.get("TELEGRAM_BOT_TOKEN"),
+        telegram_chat_id=env_map.get("TELEGRAM_CHAT_ID"),
     )
